@@ -1,0 +1,192 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* =========================================================================
+   GLOBAL — masaüstü tam ekran VN penceresi (kaydırma yok, oyun gibi)
+   ========================================================================= */
+html, body, #root {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+}
+body {
+  overflow: hidden;
+  background: #06060a;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Fontlar */
+.font-pixel {
+  font-family: 'Press Start 2P', monospace;
+  image-rendering: pixelated;
+}
+.font-sans {
+  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+}
+.font-outfit {
+  font-family: 'Outfit', sans-serif;
+}
+
+/* =========================================================================
+   KÜRSÜ / SAHNE ARKA PLANI (Ace Attorney mahkeme hissi — kendi üretimimiz)
+   ========================================================================= */
+/* NOT: position vermiyoruz — bu sınıf her zaman tailwind `absolute inset-0`
+   ile kullanılıyor. Buraya position:relative koymak (utilities'ten sonra
+   geldiği için) o `absolute`'u ezip konteyneri içerik-yüksekliğine düşürür. */
+.vn-stage-bg {
+  background:
+    /* üstten inen spot ışığı */
+    radial-gradient(120% 80% at 50% -10%, rgba(255, 240, 200, 0.10), transparent 55%),
+    /* zemin koyulaşması */
+    linear-gradient(to bottom, #11131c 0%, #0c0e16 55%, #070810 100%);
+}
+/* arka duvar ahşap panel dokusu */
+.vn-stage-bg::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background:
+    repeating-linear-gradient(90deg, rgba(0,0,0,0.18) 0 2px, transparent 2px 92px),
+    linear-gradient(to bottom, rgba(80, 52, 28, 0.22), rgba(40, 26, 14, 0.10) 60%, transparent 62%);
+  pointer-events: none;
+  mix-blend-mode: overlay;
+}
+/* zemin çizgisi / parke */
+.vn-stage-bg::after {
+  content: "";
+  position: absolute;
+  left: 0; right: 0; bottom: 0;
+  height: 34%;
+  background:
+    repeating-linear-gradient(90deg, rgba(0,0,0,0.25) 0 1px, transparent 1px 64px),
+    linear-gradient(to bottom, transparent, rgba(60, 38, 20, 0.30));
+  transform: perspective(420px) rotateX(46deg);
+  transform-origin: bottom;
+  pointer-events: none;
+  opacity: 0.5;
+}
+/* aktif konuşmacının arkasındaki renkli ışık halesi (inline --halo ile beslenir) */
+.vn-spotlight {
+  position: absolute;
+  left: 50%;
+  bottom: 8%;
+  width: 60vw;
+  height: 70vh;
+  transform: translateX(-50%);
+  background: radial-gradient(closest-side, var(--halo, rgba(234,179,8,0.25)), transparent 72%);
+  filter: blur(8px);
+  pointer-events: none;
+  transition: background 0.4s ease;
+}
+
+/* =========================================================================
+   SAHNE KARAKTERİ (büyük büst, zemine oturur)
+   ========================================================================= */
+.vn-char {
+  height: 100%;
+  width: auto;
+  object-fit: contain;
+  object-position: bottom center;
+  filter: drop-shadow(0 18px 30px rgba(0, 0, 0, 0.6));
+  user-select: none;
+  -webkit-user-drag: none;
+  /* Portreler kendi kare arka planlı (şeffaf değil). Kenarları sahneye
+     eritmek için vinyet maskesi → karakter gölgeden çıkıyormuş gibi durur,
+     kare dikdörtgen kenarı görünmez. */
+  -webkit-mask-image: radial-gradient(ellipse 76% 86% at 50% 42%, #000 66%, transparent 100%);
+  mask-image: radial-gradient(ellipse 76% 86% at 50% 42%, #000 66%, transparent 100%);
+}
+@keyframes charEnter {
+  0%   { opacity: 0; transform: translateY(34px) scale(0.97); }
+  60%  { opacity: 1; transform: translateY(-4px) scale(1.012); }
+  100% { opacity: 1; transform: translateY(0) scale(1); }
+}
+.animate-char-enter {
+  animation: charEnter 0.42s cubic-bezier(0.18, 0.78, 0.3, 1.1) both;
+  transform-origin: bottom center;
+}
+/* nefes alma (konuşurken hafif salınım) */
+@keyframes charBob {
+  0%, 100% { transform: translateY(0); }
+  50%      { transform: translateY(-6px); }
+}
+.animate-char-bob { animation: charBob 3.2s ease-in-out infinite; }
+
+/* =========================================================================
+   DİYALOG KUTUSU (alt şerit, tam genişlik, AA tarzı)
+   ========================================================================= */
+.vn-dialogue {
+  background: linear-gradient(to bottom, rgba(8, 11, 22, 0.93), rgba(4, 6, 14, 0.97));
+  border-top-width: 3px;
+  border-top-style: solid;
+  box-shadow: 0 -12px 40px rgba(0, 0, 0, 0.6), inset 0 1px 0 rgba(255, 255, 255, 0.05);
+  backdrop-filter: blur(6px);
+}
+.vn-nameplate {
+  font-family: 'Press Start 2P', monospace;
+  text-shadow: 2px 2px 0 rgba(0, 0, 0, 0.6);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.5);
+}
+/* devam üçgeni yanıp sönme */
+@keyframes blinkTri { 0%, 100% { opacity: 1; transform: translateY(0); } 50% { opacity: 0.15; transform: translateY(3px); } }
+.animate-blink-tri { animation: blinkTri 0.9s steps(1, end) infinite; }
+
+/* =========================================================================
+   ESKİ ANİMASYONLAR (sprite efektleri korunur)
+   ========================================================================= */
+@keyframes slam {
+  0% { transform: translateY(-22px) scale(1.05); }
+  15% { transform: translateY(3px) scale(0.98); }
+  30% { transform: translateY(-5px) scale(1.01); }
+  45% { transform: translateY(0) scale(1); }
+  100% { transform: translateY(0) scale(1); }
+}
+.animate-slam { animation: slam 0.7s ease-out; transform-origin: bottom center; }
+
+@keyframes sweatSlide {
+  0% { stroke-dashoffset: 10; opacity: 0; transform: translateY(-3px); }
+  20% { opacity: 0.85; }
+  80% { opacity: 0.85; transform: translateY(6px); }
+  100% { stroke-dashoffset: 0; opacity: 0; transform: translateY(8px); }
+}
+.animate-sweat { animation: sweatSlide 1.8s ease-in infinite; stroke-dasharray: 8; }
+
+@keyframes screenShake {
+  0%, 100% { transform: translate(0, 0); }
+  10% { transform: translate(-5px, 3px); }
+  25% { transform: translate(4px, -4px); }
+  40% { transform: translate(-4px, 3px); }
+  55% { transform: translate(5px, 2px); }
+  70% { transform: translate(-3px, -2px); }
+  85% { transform: translate(3px, 3px); }
+}
+.animate-shake { animation: screenShake 0.45s ease-in-out infinite; }
+
+@keyframes flashWhite { 0% { opacity: 0.85; } 100% { opacity: 0; } }
+.animate-flash { animation: flashWhite 0.5s ease-out forwards; }
+
+@keyframes scalePop {
+  0% { transform: scale(0.8) translateY(15px); opacity: 0; }
+  70% { transform: scale(1.06) translateY(-2px); opacity: 1; }
+  100% { transform: scale(1) translateY(0); opacity: 1; }
+}
+.animate-pop { animation: scalePop 0.35s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards; transform-origin: bottom center; }
+
+/* scrollbar */
+.scrollbar-thin::-webkit-scrollbar { width: 6px; }
+.scrollbar-thin::-webkit-scrollbar-track { background: rgba(15, 23, 42, 0.6); border-radius: 4px; }
+.scrollbar-thin::-webkit-scrollbar-thumb { background: rgba(148, 163, 184, 0.3); border-radius: 4px; }
+.scrollbar-thin::-webkit-scrollbar-thumb:hover { background: rgba(148, 163, 184, 0.5); }
+
+.backdrop-blur-md { backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); }
+
+/* erişilebilirlik: hareket azaltma */
+@media (prefers-reduced-motion: reduce) {
+  .animate-char-enter, .animate-char-bob, .animate-slam, .animate-sweat,
+  .animate-shake, .animate-flash, .animate-pop, .animate-blink-tri,
+  .animate-ping, .animate-pulse {
+    animation: none !important;
+    transform: none !important;
+  }
+}
