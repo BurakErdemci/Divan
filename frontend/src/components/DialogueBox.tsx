@@ -23,6 +23,16 @@ const SPEAKER_COLORS: Record<string, { bg: string; text: string; border: string 
   yargic: { bg: '#3f2b0f', text: '#fef9c3', border: '#eab308' },
 };
 
+// Karaktere özel yazı tipi (kişilik + okunabilirlik)
+const ROLE_FONT: Record<string, string> = {
+  stratejist: 'font-char-stratejist',
+  supheci: 'font-char-supheci',
+  yaratici: 'font-char-yaratici',
+  muhendis: 'font-char-muhendis',
+  realist: 'font-char-realist',
+  yargic: 'font-char-yargic',
+};
+
 export const DialogueBox: React.FC<DialogueBoxProps> = ({
   speaker,
   role,
@@ -80,8 +90,8 @@ export const DialogueBox: React.FC<DialogueBoxProps> = ({
       </div>
 
       {/* Metin alanı — her zaman tam ve okunur (CLAUDE.md §5) */}
-      <div className="max-w-5xl mx-auto">
-        <div className="text-slate-100 text-[15px] md:text-[17px] leading-relaxed font-sans whitespace-pre-line overflow-y-auto max-h-[26vh] pr-2 scrollbar-thin">
+      <div className="max-w-4xl mx-auto">
+        <div className={`vn-dialogue-text whitespace-pre-line overflow-y-auto max-h-[26vh] pr-2 scrollbar-thin ${ROLE_FONT[role] || 'font-sans'}`}>
           {text || (
             <span className="text-slate-500 italic">Duruşma başlıyor…</span>
           )}

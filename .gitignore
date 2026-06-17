@@ -27,3 +27,9 @@ backend/member_live.txt
 backend/agy_*.log
 
 Every Ace Attorney Objection.mp3
+
+# Internal design / handoff docs — local only, not for GitHub
+CLAUDE.md
+DIVAN_PROJECT_CONTEXT.md
+frontend.md
+backend/last_flow.txt

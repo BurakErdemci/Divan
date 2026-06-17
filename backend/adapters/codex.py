@@ -8,6 +8,7 @@ böylece tırnaklama/escape sorunları olmaz. `--output-schema` MemberResponse
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import shutil
 import tempfile
@@ -16,7 +17,12 @@ from pathlib import Path
 
 from schemas import MemberResponse, Role
 
-from .base import Context, MemberAdapter, build_schema_member_prompt
+from .base import (
+    Context,
+    MemberAdapter,
+    build_schema_member_prompt,
+    extract_json_between_sentinels,
+)
 
 
 class CodexAdapter(MemberAdapter):
@@ -94,9 +100,54 @@ class CodexAdapter(MemberAdapter):
                 f"Codex output dosyası oluşmadı: {output_path}\nstdout:\n{self.last_stdout[-2000:]}"
             )
 
-        data = output_path.read_text(encoding="utf-8")
+        raw = output_path.read_text(encoding="utf-8")
         try:
             output_path.unlink()
         except OSError:
             pass
-        return MemberResponse.model_validate_json(data)
+        # base._validate kullan: role-otoritesi + placeholder kontrolü uygulansın.
+        return self._validate(json.loads(raw))
+
+    async def ask_raw(self, prompt: str) -> dict:
+        """Şema dayatmadan serbest JSON döndürür (Themis fazları için). Prompt
+        sentinel talimatını içermeli; çıktı sentinel arasından çekilir."""
+        output_path = Path(tempfile.gettempdir()) / f"divan_judge_{os.getpid()}_{uuid.uuid4().hex}.json"
+        cmd = [
+            self._resolve_cmd(), "exec",
+            "--skip-git-repo-check", "--sandbox", "read-only", "--ephemeral",
+            "--output-last-message", str(output_path),
+        ]
+        if self.model:
+            cmd += ["--model", self.model]
+        cmd.append("-")
+
+        proc = await asyncio.create_subprocess_exec(
+            *cmd, stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+        )
+        try:
+            stdout, stderr = await asyncio.wait_for(
+                proc.communicate(prompt.encode("utf-8")), timeout=self.timeout
+            )
+        except asyncio.TimeoutError:
+            proc.kill()
+            await proc.wait()
+            raise TimeoutError(f"CodexAdapter(judge) {self.timeout}s içinde cevap vermedi.")
+
+        self.last_stderr = stderr.decode("utf-8", errors="replace")
+        if proc.returncode != 0 or not output_path.exists():
+            raise RuntimeError(
+                f"codex exec(judge) başarısız (exit={proc.returncode}). stderr:\n{self.last_stderr[-1500:]}"
+            )
+        text = output_path.read_text(encoding="utf-8")
+        try:
+            output_path.unlink()
+        except OSError:
+            pass
+        try:
+            return extract_json_between_sentinels(text)
+        except Exception:
+            t = text.strip().strip("`").strip()
+            if t.startswith("json"):
+                t = t[4:].strip()
+            return json.loads(t)

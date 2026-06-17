@@ -5,9 +5,9 @@
   "type": "module",
   "main": "dist-electron/electron/main.js",
   "scripts": {
-    "dev": "vite",
+    "dev": "npm run electron:dev",
+    "backend": "cd .. && backend\\.venv\\Scripts\\python.exe -m uvicorn main:app --host 127.0.0.1 --port 8000 --app-dir backend",
     "build": "tsc && tsc -p tsconfig.electron.json && vite build",
-    "preview": "vite preview",
     "electron:dev": "concurrently \"vite\" \"tsc -p tsconfig.electron.json --watch\" \"wait-on http://localhost:5173 && node scripts/run-electron.js\""
   },
   "dependencies": {

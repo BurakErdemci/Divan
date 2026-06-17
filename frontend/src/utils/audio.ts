@@ -94,6 +94,44 @@ export const audioService = {
     preloadSamples();
   },
 
+  // Bir ses dosyasının var olup olmadığı (graceful fallback kararları için).
+  has(name: string): boolean {
+    return hasSample(name);
+  },
+
+  // Yalnızca gerçek ses dosyası varsa çal (sentez fallback YOK). İkincil
+  // vuruşlar için: dosya yoksa sessiz kalsın, sentez "ucuz" ses üretmesin.
+  playSampleOnly(name: string, volume = 0.9) {
+    if (hasSample(name)) playSample(name, volume);
+  },
+
+  // İtiraz masaya-vuruşu: karaktere özel dosya (desk-slam-<id>) varsa onu,
+  // yoksa genel desk-slam'i çal (ikisi de yoksa sessiz).
+  playObjectionSlam(characterId: string, volume = 0.9) {
+    if (hasSample(`desk-slam-${characterId}`)) { playSample(`desk-slam-${characterId}`, volume); return; }
+    if (hasSample('desk-slam')) playSample('desk-slam', volume);
+  },
+
+  // "DUR BAKALIM!" — karaktere özel (holdit-<id>) varsa onu, yoksa genel.
+  playHoldIt(characterId: string, volume = 0.95) {
+    if (hasSample(`holdit-${characterId}`)) { playSample(`holdit-${characterId}`, volume); return; }
+    if (hasSample('holdit')) playSample('holdit', volume);
+  },
+
+  // "AL BAKALIM!" — karaktere özel (takethat-<id>) varsa onu, yoksa genel.
+  playTakeThat(characterId: string, volume = 0.95) {
+    if (hasSample(`takethat-${characterId}`)) { playSample(`takethat-${characterId}`, volume); return; }
+    if (hasSample('takethat')) playSample('takethat', volume);
+  },
+
+  // hold it / take that için herhangi bir dosya (genel veya karaktere özel) var mı?
+  hasHoldIt(characterId: string): boolean {
+    return hasSample(`holdit-${characterId}`) || hasSample('holdit');
+  },
+  hasTakeThat(characterId: string): boolean {
+    return hasSample(`takethat-${characterId}`) || hasSample('takethat');
+  },
+
   toggleMute() {
     isMuted = !isMuted;
     if (isMuted && audioCtx) {

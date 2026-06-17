@@ -1,22 +1,22 @@
 import { TrialEvent } from '../types/trial';
 
-const API_BASE_URL = 'http://localhost:8000'; // FastAPI dev server default
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
 
 export interface StartTrialResponse {
   trial_id: string;
 }
 
-export async function startTrial(question: string): Promise<string> {
+export async function startTrial(question: string, projectContext = ''): Promise<string> {
   const response = await fetch(`${API_BASE_URL}/api/trials`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
     },
-    body: JSON.stringify({ question }),
+    body: JSON.stringify({ question, project_context: projectContext }),
   });
 
   if (!response.ok) {
-    throw new Error(`Failed to start trial: ${response.statusText}`);
+    throw new Error(`Duruşma başlatılamadı: ${response.statusText || response.status}`);
   }
 
   const data: StartTrialResponse = await response.json();
@@ -27,40 +27,48 @@ export function listenToTrialStream(
   trialId: string,
   onEvent: (event: TrialEvent) => void,
   onError: (error: string) => void,
-  onComplete: () => void
+  onComplete: () => void,
 ): () => void {
   const url = `${API_BASE_URL}/api/trials/${trialId}/events`;
   const eventSource = new EventSource(url);
+  let completed = false;
 
   eventSource.onmessage = (event) => {
     try {
       const parsed: TrialEvent = JSON.parse(event.data);
-      onEvent(parsed);
-      
-      // If the backend signals that the verdict event is sent, or a complete signal
-      // is received, we can complete the stream. Usually SSE can continue until closed, 
-      // or we can detect "verdict" phase event as the final.
-      if (parsed.type === "verdict") {
-        // We let the verdict render, then we complete.
-        setTimeout(() => {
-          onComplete();
-          eventSource.close();
-        }, 1000);
+
+      if (parsed.type === 'complete') {
+        completed = true;
+        onComplete();
+        eventSource.close();
+        return;
       }
+
+      if (parsed.type === 'error') {
+        completed = true;
+        onEvent(parsed);
+        eventSource.close();
+        return;
+      }
+
+      onEvent(parsed);
     } catch (err) {
-      console.error("Failed to parse SSE event", err);
-      onError("Veri ayrıştırma hatası");
+      completed = true;
+      console.error('Failed to parse SSE event', err);
+      onError('Veri ayrıştırma hatası.');
+      eventSource.close();
     }
   };
 
   eventSource.onerror = (error) => {
-    console.error("EventSource error", error);
-    onError("Sunucu bağlantısı koptu.");
+    if (completed) return;
+    console.error('EventSource error', error);
+    onError('Sunucu bağlantısı koptu. Ayrıntı için backend/.divan/server.log dosyasına bak.');
     eventSource.close();
   };
 
-  // Return unsubscribe/disconnect function
   return () => {
+    completed = true;
     eventSource.close();
   };
 }

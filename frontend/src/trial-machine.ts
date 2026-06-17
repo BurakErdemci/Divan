@@ -3,9 +3,10 @@ import { TrialEvent, MemberId, MemberResponse, Clash, Verdict, Frame, Role } fro
 import { runMockTrial } from './api/mockTrialStream';
 import { startTrial as apiStartTrial, listenToTrialStream } from './api/trialClient';
 import { audioService } from './utils/audio';
+import { getLang, TRIAL_STR, rulingSentence } from './i18n';
 
 export interface TrialState {
-  phase: 'idle' | 'frame' | 'opening' | 'clash' | 'verdict';
+  phase: 'idle' | 'loading' | 'frame' | 'opening' | 'clash' | 'verdict';
   rawQuestion: string;
   frame: Frame | null;
   activeMember: MemberId | null;
@@ -92,6 +93,12 @@ export function useTrialMachine() {
   const streamingRef = useRef(false);
   const waitingRef = useRef(false);
   const proceedRef = useRef<(() => void) | null>(null);
+  // Bir olayın içinde sıraya eklenen ekstra replik beat'leri (ör. itiraz
+  // reddedilince konuşmacının çıldırma repliği). Kuyruğa geçmeden önce oynar.
+  type Beat = { speaker: string; role: Role | 'yargic' | ''; text: string; onShow?: () => void };
+  const injectedRef = useRef<Beat[]>([]);
+  // İtiraz sırası: çift index → İTİRAZ!, tek index → DUR BAKALIM! (AA gidiş-geliş)
+  const objectionCountRef = useRef(0);
   const membersRef = useRef(state.members);
   membersRef.current = state.members;
 
@@ -106,6 +113,8 @@ export function useTrialMachine() {
     streamingRef.current = false;
     waitingRef.current = false;
     proceedRef.current = null;
+    injectedRef.current = [];
+    objectionCountRef.current = 0;
     fullTextRef.current = '';
     currentTextIndexRef.current = 0;
     setState(initialState());
@@ -176,14 +185,21 @@ export function useTrialMachine() {
     holdForContinue();
   };
 
-  // Kullanıcı "ilerle": akıyorsa tamamla, bekliyorsa sıradaki olaya geç.
+  // Kullanıcı "ilerle": akıyorsa tamamla; bekliyorsa önce enjekte beat varsa
+  // onu oynat, yoksa sıradaki kuyruk olayına geç.
   const advance = useCallback(() => {
     if (streamingRef.current) { finishText(); return; }
     if (waitingRef.current) {
       waitingRef.current = false;
       setState(s => ({ ...s, waitingForContinue: false }));
-      isProcessingRef.current = false;
-      processNextEvent();
+      if (injectedRef.current.length > 0) {
+        const beat = injectedRef.current.shift()!;
+        sayThenHold(beat.speaker, beat.role, beat.text); // isProcessing TRUE kalır (aynı olay)
+        beat.onShow?.();
+      } else {
+        isProcessingRef.current = false;
+        processNextEvent();
+      }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -233,21 +249,51 @@ export function useTrialMachine() {
           const color = MEMBER_COLORS[event.from] || '#ef4444';
           const fromName = MEMBER_NAMES[event.from] || event.from;
           const targetName = MEMBER_NAMES[event.target] || event.target;
-          audioService.playObjection(event.from);
+          const fromRole = (DEFAULT_MEMBERS[event.from as keyof typeof DEFAULT_MEMBERS]?.role) ?? 'supheci';
+
+          // 1) Bağırış: ilk atak İTİRAZ!, karşı atak DUR BAKALIM! (holdit dosyası
+          //    varsa). Dosya yoksa İTİRAZ'a düşer — sessiz boşluk olmaz.
+          const lang = getLang();
+          const idx = objectionCountRef.current++;
+          const useHoldIt = idx % 2 === 1 && audioService.hasHoldIt(event.from);
+          const bannerText = useHoldIt ? TRIAL_STR.holdit[lang] : TRIAL_STR.objection[lang];
+          if (useHoldIt) audioService.playHoldIt(event.from, 0.95);
+          else audioService.playObjection(event.from);
           setState(s => ({
-            ...s, showObjectionBanner: true, objectionBannerText: 'İTİRAZ!', objectionBannerColor: color,
+            ...s, showObjectionBanner: true, objectionBannerText: bannerText, objectionBannerColor: color,
             screenShake: true, avatarState: 'objection', activeMember: event.from,
           }));
-          setTimeout(() => setState(s => ({ ...s, screenShake: false })), 600);
-          setTimeout(() => audioService.playDeskSlam(), 400);
-          if (event.ruling === 'upheld') {
-            setTimeout(() => { audioService.playGavel(); setState(s => ({ ...s, gavelFlash: true })); }, 1000);
-            setTimeout(() => setState(s => ({ ...s, gavelFlash: false })), 1500);
-          }
+          setTimeout(() => setState(s => ({ ...s, screenShake: false })), 350);
+          // 2) Bağırış BİTTİKTEN sonra masaya vuruş (üst üste binmesin)
+          setTimeout(() => audioService.playObjectionSlam(event.from, 0.9), 950);
+
+          // 3) Banner kapanır, Yargıç hükmü açıklar (tokmak sesi YOK — o sadece nihai hükümde)
           setTimeout(() => {
             setState(s => ({ ...s, showObjectionBanner: false }));
-            const txt = `${fromName}, ${targetName}'in "${event.claim}" iddiasına itiraz ediyor.\n\nHüküm: ${event.ruling === 'upheld' ? 'KABUL (Upheld)' : 'RED (Overruled)'}.`;
-            sayThenHold('Themis (Yargıç)', 'yargic', txt);
+            const rulingVal = event.ruling === 'upheld' ? 'upheld' : 'overruled';
+            const txt = rulingSentence(fromName, targetName, event.claim, rulingVal, lang);
+            sayThenHold(TRIAL_STR.judgeName[lang], 'yargic', txt);
+
+            // 4) RED ise: hükümden SONRA, reddedilen kişi kendi repliğiyle çıldırır
+            //    (ayrı beat — kullanıcı hükmü gördükten sonra ilerleyince oynar).
+            if (event.ruling === 'overruled') {
+              injectedRef.current.push({
+                speaker: fromName,
+                role: fromRole,
+                text: TRIAL_STR.freakout[lang],
+                onShow: () => {
+                  audioService.playSampleOnly('freakout', 0.85);
+                  setState(s => ({ ...s, activeMember: event.from, avatarState: 'nervous', screenShake: true }));
+                  setTimeout(() => setState(s => ({ ...s, screenShake: false })), 1200);
+                },
+              });
+            } else if (event.ruling === 'upheld') {
+              // İtiraz haklı çıktı → kazanan kanıtı masaya koyar: AL BAKALIM!
+              setTimeout(() => {
+                audioService.playTakeThat(event.from, 0.95);
+                setState(s => ({ ...s, activeMember: event.from, avatarState: 'confident' }));
+              }, 1200);
+            }
           }, 2200);
           break;
         }
@@ -279,6 +325,11 @@ export function useTrialMachine() {
 
         case 'error':
           setState(s => ({ ...s, error: event.message, isStreaming: false }));
+          eventQueueRef.current = [];
+          isProcessingRef.current = false;
+          break;
+
+        case 'complete':
           isProcessingRef.current = false;
           break;
       }
@@ -292,9 +343,9 @@ export function useTrialMachine() {
     if (!isProcessingRef.current && !waitingRef.current && eventQueueRef.current.length > 0) processNextEvent();
   };
 
-  const startTrial = async (question: string, mode: 'mock' | 'live') => {
+  const startTrial = async (question: string, mode: 'mock' | 'live', projectContext = '') => {
     reset();
-    setState(s => ({ ...s, rawQuestion: question, isStreaming: true }));
+    setState(s => ({ ...s, phase: 'loading', rawQuestion: question, isStreaming: true }));
     audioService.init();
 
     if (mode === 'mock') {
@@ -308,12 +359,24 @@ export function useTrialMachine() {
       );
     } else {
       try {
-        const trialId = await apiStartTrial(question);
+        const trialId = await apiStartTrial(question, projectContext);
         sseUnsubscribeRef.current = listenToTrialStream(
           trialId,
-          (event) => { eventQueueRef.current.push(event); onNewEvents(); },
+          (event) => {
+            if (event.type === 'error') {
+              eventQueueRef.current = [];
+              setState(s => ({ ...s, error: event.message, isStreaming: false }));
+              return;
+            }
+            if (event.type !== 'complete') {
+              eventQueueRef.current.push(event);
+            }
+          },
           (err) => setState(s => ({ ...s, error: err, isStreaming: false })),
-          () => setState(s => ({ ...s, isStreaming: false }))
+          () => {
+            setState(s => ({ ...s, isStreaming: false }));
+            onNewEvents();
+          }
         );
       } catch (err) {
         setState(s => ({ ...s, error: err instanceof Error ? err.message : 'Backend bağlantısı kurulamadı.', isStreaming: false }));

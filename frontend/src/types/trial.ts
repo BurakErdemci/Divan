@@ -59,4 +59,5 @@ export type TrialEvent =
   | { type: "clash"; data: Clash }
   | { type: "objection"; from: MemberId; target: MemberId; claim: string; ruling?: "upheld" | "overruled" }
   | { type: "verdict"; data: Verdict }
-  | { type: "error"; message: string };
+  | { type: "error"; message: string }
+  | { type: "complete" };

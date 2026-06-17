@@ -1,0 +1,7 @@
+# Divan backend bağımlılıkları
+pydantic>=2.0
+python-dotenv>=1.0
+pywinpty>=2.0        # Windows ConPTY (Claude Code interaktif oturumu)
+pexpect>=4.9         # (Unix fallback)
+fastapi>=0.110
+uvicorn>=0.29        # ASGI sunucu: uvicorn main:app

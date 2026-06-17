@@ -8,10 +8,11 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 from .agy import AgyAdapter
-from .api import DeepSeekAdapter, XaiAdapter
+from .api import DeepSeekAdapter
 from .base import MemberAdapter
 from .claude_code import ClaudeCodeAdapter
 from .codex import CodexAdapter
+from .ollama import OllamaAtlasAdapter
 
 
 def load_divan_env() -> None:
@@ -39,5 +40,5 @@ def build_default_member_adapters() -> list[MemberAdapter]:
             model=os.environ.get("MODEL_APOLLO"),
         ),
         DeepSeekAdapter(),
-        XaiAdapter(),
+        OllamaAtlasAdapter(),
     ]

@@ -127,15 +127,22 @@ class ClaudeCodeAdapter(MemberAdapter):
     @staticmethod
     def _rate_limit_message(cleaned: str) -> str | None:
         lower = cleaned.lower()
-        if "hit your session limit" not in lower and "/rate-limit-options" not in lower:
+        signals = (
+            "hit your session limit",
+            "/rate-limit-options",
+            "weekly limit",          # "You've used 81% of your weekly limit"
+            "usage limit",
+            "approaching your",
+        )
+        if not any(sig in lower for sig in signals):
             return None
         reset = None
         marker = "resets "
         idx = lower.find(marker)
         if idx != -1:
-            reset = cleaned[idx + len(marker) :].splitlines()[0].strip()
+            reset = cleaned[idx + len(marker):].splitlines()[0].strip()
         suffix = f" Reset: {reset}" if reset else ""
-        return f"Claude Code session limit hit.{suffix}"
+        return f"Claude Code limitine ulaşıldı (Athena yanıt veremiyor).{suffix}"
 
     def close(self) -> None:
         self._stop.set()
@@ -155,3 +162,11 @@ class ClaudeCodeAdapter(MemberAdapter):
             await asyncio.to_thread(self.start)
         data = await asyncio.to_thread(self._send_and_collect, prompt)
         return self._validate(data)
+
+    async def ask_raw(self, prompt: str) -> dict:
+        """Üye kontratını baypas eder: verilen prompt'u aynen gönderir, sentinel
+        arası JSON'ı dict olarak döndürür. Themis (yargıç) fazları için —
+        prompt sentinel talimatını kendisi içermeli."""
+        if self._proc is None:
+            await asyncio.to_thread(self.start)
+        return await asyncio.to_thread(self._send_and_collect, prompt)

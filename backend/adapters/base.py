@@ -89,16 +89,21 @@ def build_member_prompt(persona: str, proposition: str, context: Context = None)
         parts += ["", f"## Sana iletilen rakip argüman (yalnız bu eksende cevapla)\n{context.strip()}"]
     parts += [
         "",
+        "## Nasıl konuş",
+        "Günlük, samimi, eğlenceli bir dille — arkadaşına anlatır gibi. Rapor/danışman dili ve jargon YOK.",
+        "Soru günlük bir mesele ya da zevk meselesiyse (rock mı rap mi gibi) KASMA: "
+        "kendi teknik çerçeveni zorla dayatma, kişiliğinle rahat ve net konuş.",
+        "stance: net tarafını söyle. reasons: neden o tarafta olduğunu sade sade anlat.",
+        "flip_condition: seni fikrinden ne döndürür, doğal tek cümleyle — zorlama 'test koşulu' değil; "
+        "günlük soruda hafif olabilir.",
+        "",
         "## Çıktı — KESİN",
-        f"Cevabını SADECE şu sınırlayıcılar arasında, tek satır geçerli JSON olarak ver:",
+        "Cevabını SADECE şu sınırlayıcılar arasında, tek satır geçerli JSON ver:",
         f"{SENTINEL_START}",
-        "Buraya tek satır JSON yaz. Zorunlu anahtarlar: role, stance, reasons, confidence, flip_condition.",
+        "Zorunlu anahtarlar: role, stance, reasons, confidence, flip_condition.",
         f"{SENTINEL_END}",
-        "Sınırlayıcılar dışına HİÇBİR şey yazma. Markdown, ön söz, kod bloğu YOK.",
-        'KURAL: "..." veya başka placeholder kullanma; tüm alanları gerçek, karara özgü içerikle doldur.',
-        'KURAL: "flip_condition" BOŞ OLAMAZ. reasons içine koyma; ayrı alana, '
-        "tek somut ve test edilebilir koşul olarak yaz (\"Şu doğruysa "
-        'fikrimi değiştiririm: ...\").',
+        "Sınırlayıcı dışına HİÇBİR şey yazma. Markdown/ön söz/kod bloğu YOK.",
+        'Placeholder ("...") kullanma; alanları gerçek içerikle doldur. flip_condition boş olamaz (kısa ve doğal yaz).',
     ]
     return "\n".join(parts)
 
@@ -115,11 +120,15 @@ def build_schema_member_prompt(persona: str, proposition: str, context: Context 
         parts += ["", f"## Sana iletilen rakip argüman (yalnız bu eksende cevapla)\n{context.strip()}"]
     parts += [
         "",
+        "## Nasıl konuş",
+        "Günlük, samimi, eğlenceli bir dille — arkadaşına anlatır gibi. Rapor/danışman dili ve jargon YOK.",
+        "Soru günlük/zevk meselesiyse KASMA: teknik çerçeveni zorla dayatma, kişiliğinle rahat konuş.",
+        "flip_condition: seni ne döndürür, doğal tek cümleyle (zorlama test koşulu değil; günlük soruda hafif olabilir).",
+        "",
         "## Çıktı - KESİN JSON",
-        "Sadece role, stance, reasons, confidence, flip_condition alanlarını içeren geçerli JSON döndür.",
-        "Markdown, ön söz, kod bloğu, ek açıklama YOK.",
-        'KURAL: "..." veya başka placeholder kullanma; tüm alanları gerçek, karara özgü içerikle doldur.',
-        'KURAL: "flip_condition" BOŞ OLAMAZ. Tek somut ve test edilebilir koşul yaz.',
+        "Sadece role, stance, reasons, confidence, flip_condition alanlı geçerli JSON döndür.",
+        "Markdown, ön söz, kod bloğu YOK.",
+        'Placeholder ("...") kullanma; flip_condition boş olamaz (kısa ve doğal).',
     ]
     return "\n".join(parts)
 

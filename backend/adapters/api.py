@@ -1,20 +1,24 @@
-"""HTTP chat-completions adapter - Hephaestus & Atlas.
-
-API key'ler henüz yok; bu iskelet DeepSeek ve xAI'nin OpenAI-compatible chat
-completions akışına göre tek MemberAdapter kontratını uygular.
-"""
+"""HTTP chat-completions adapter for Hephaestus via DeepSeek."""
 
 from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
+import time
 import urllib.error
 import urllib.request
 
 from schemas import MemberResponse, Role
 
 from .base import Context, MemberAdapter, build_schema_member_prompt, extract_json_between_sentinels
+
+logger = logging.getLogger("divan.backend")
+
+
+def _raise_provider(provider: str):
+    raise ValueError(f"Bilinmeyen provider: {provider}")
 
 
 class ApiAdapter(MemberAdapter):
@@ -39,38 +43,54 @@ class ApiAdapter(MemberAdapter):
 
     @staticmethod
     def _env_model(provider: str) -> str:
-        if provider == "deepseek":
-            return os.environ.get("MODEL_HEPHAESTUS", "deepseek-v4-flash")
-        if provider == "xai":
-            return os.environ.get("MODEL_ATLAS", "grok-4.1-fast")
-        raise ValueError(f"Bilinmeyen provider: {provider}")
+        return {
+            "deepseek": os.environ.get("MODEL_HEPHAESTUS", "deepseek-v4"),
+            "xai": os.environ.get("MODEL_ATLAS", "grok-4.1-fast"),
+            "openai": os.environ.get("MODEL_SOCRATES_API", "gpt-5.5"),
+        }.get(provider) or _raise_provider(provider)
 
     @staticmethod
     def _env_key(provider: str) -> str | None:
-        if provider == "deepseek":
-            return os.environ.get("DEEPSEEK_API_KEY")
-        if provider == "xai":
-            return os.environ.get("XAI_API_KEY")
-        raise ValueError(f"Bilinmeyen provider: {provider}")
+        keys = {"deepseek": "DEEPSEEK_API_KEY", "xai": "XAI_API_KEY", "openai": "OPENAI_API_KEY"}
+        if provider not in keys:
+            _raise_provider(provider)
+        return os.environ.get(keys[provider])
 
     @staticmethod
     def _env_base(provider: str) -> str:
-        if provider == "deepseek":
-            return os.environ.get("DEEPSEEK_API_BASE", "https://api.deepseek.com/chat/completions")
-        if provider == "xai":
-            return os.environ.get("XAI_API_BASE", "https://api.x.ai/v1/chat/completions")
-        raise ValueError(f"Bilinmeyen provider: {provider}")
+        bases = {
+            "deepseek": ("DEEPSEEK_API_BASE", "https://api.deepseek.com/chat/completions"),
+            "xai": ("XAI_API_BASE", "https://api.x.ai/v1/chat/completions"),
+            "openai": ("OPENAI_API_BASE", "https://api.openai.com/v1/chat/completions"),
+        }
+        if provider not in bases:
+            _raise_provider(provider)
+        env, default = bases[provider]
+        return os.environ.get(env, default)
 
     @staticmethod
     def _default_temperature(role: Role) -> float:
-        return {"muhendis": 0.3, "realist": 0.4}.get(role, 0.3)
+        return {"muhendis": 0.3, "realist": 0.4, "supheci": 0.3}.get(role, 0.4)
 
     async def ask(self, proposition: str, context: Context = None) -> MemberResponse:
         if not self.api_key:
-            raise RuntimeError(f"{self.provider} API key eksik; .env içinde ayarla.")
+            raise RuntimeError(f"{self.provider} API key eksik; .env icinde ayarla.")
         prompt = build_schema_member_prompt(self.persona, proposition, context)
-        data = await asyncio.to_thread(self._post_chat_completion, prompt)
+        started_at = time.perf_counter()
+        logger.info("adapter.call.start adapter=%s role=%s provider=%s model=%s", type(self).__name__, self.role, self.provider, self.model)
+        try:
+            data = await asyncio.to_thread(self._post_chat_completion, prompt)
+        except Exception:
+            logger.exception("adapter.call.error adapter=%s role=%s elapsed=%.1fs", type(self).__name__, self.role, time.perf_counter() - started_at)
+            raise
+        logger.info("adapter.call.done adapter=%s role=%s elapsed=%.1fs", type(self).__name__, self.role, time.perf_counter() - started_at)
         return self._validate(data)
+
+    async def ask_raw(self, prompt: str) -> dict:
+        """Yargıç fazları için serbest JSON (şema/role dayatmadan)."""
+        if not self.api_key:
+            raise RuntimeError(f"{self.provider} API key eksik; ayarlardan gir.")
+        return await asyncio.to_thread(self._post_chat_completion, prompt)
 
     def _post_chat_completion(self, prompt: str) -> dict:
         payload = {
@@ -78,7 +98,6 @@ class ApiAdapter(MemberAdapter):
             "temperature": self.temperature,
             "response_format": {"type": "json_object"},
             "messages": [
-                {"role": "system", "content": self.persona},
                 {"role": "user", "content": prompt},
             ],
         }
@@ -114,3 +133,10 @@ class DeepSeekAdapter(ApiAdapter):
 class XaiAdapter(ApiAdapter):
     def __init__(self, **kwargs):
         super().__init__(role="realist", persona_name="atlas", provider="xai", **kwargs)
+
+
+class OpenAiAdapter(ApiAdapter):
+    """OpenAI Chat Completions (Socrates'in API yolu — Codex CLI yerine)."""
+
+    def __init__(self, **kwargs):
+        super().__init__(role="supheci", persona_name="socrates", provider="openai", **kwargs)

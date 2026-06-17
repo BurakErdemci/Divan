@@ -12,8 +12,10 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import shutil
+import subprocess
 import time
 from pathlib import Path
 
@@ -26,6 +28,13 @@ from .base import (
     build_member_prompt,
     extract_json_between_sentinels,
 )
+
+logger = logging.getLogger("divan.backend")
+
+# Tüm agy çağrıları aynı stabil cwd'de koşar (transcript fallback kayıtlı dizin ister).
+# Eşzamanlı çalışırlarsa agy'nin cwd→conversation_id eşlemesi (last_conversations.json)
+# yarışır → yanlış/boş transcript. Bu global kilit agy çağrılarını seri yapar.
+_AGY_LOCK = asyncio.Lock()
 
 
 class AgyAdapter(MemberAdapter):
@@ -50,6 +59,8 @@ class AgyAdapter(MemberAdapter):
             or Path.home() / ".gemini" / "antigravity-cli"
         )
         self.transcript_poll_seconds = float(os.environ.get("DIVAN_AGY_TRANSCRIPT_POLL", "5"))
+        # Süreç çalışırken transcript'i bu aralıkla yokla (bilinen no-exit bug'ı için).
+        self.poll_interval = float(os.environ.get("DIVAN_AGY_POLL", "2"))
 
     def _resolve_cmd(self) -> str:
         exe = (
@@ -63,6 +74,26 @@ class AgyAdapter(MemberAdapter):
 
     async def ask(self, proposition: str, context: Context = None) -> MemberResponse:
         prompt = build_member_prompt(self.persona, proposition, context)
+        prompt += (
+            "\n\n## AGY ICIN EK KISIT\n"
+            "Cok kisa cevap ver. stance tek kisa cumle olsun. "
+            "reasons tam 3 madde olsun ve her madde en fazla 14 kelime olsun. "
+            "flip_condition tek kisa cumle olsun. JSON disina hicbir sey yazma."
+        )
+        text = await self._run_agy(prompt)
+        return self._validate(extract_json_between_sentinels(text))
+
+    async def ask_raw(self, prompt: str) -> dict:
+        """Yargıç fazları için: verilen prompt'u aynen koştur, sentinel JSON döndür."""
+        text = await self._run_agy(prompt)
+        return extract_json_between_sentinels(text)
+
+    async def _run_agy(self, prompt: str) -> str:
+        # Seri çalış: aynı anda iki agy → cwd→id eşlemesi yarışır (single-gemini fix).
+        async with _AGY_LOCK:
+            return await self._run_agy_locked(prompt)
+
+    async def _run_agy_locked(self, prompt: str) -> str:
         log_path = self.cwd / ".divan" / "agy.log"
         log_path.parent.mkdir(parents=True, exist_ok=True)
         cmd = [
@@ -77,38 +108,105 @@ class AgyAdapter(MemberAdapter):
         if self.model:
             cmd += ["--model", self.model]
 
-        proc = await asyncio.create_subprocess_exec(
-            *cmd,
-            cwd=str(self.cwd),
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
+        started_at = time.perf_counter()
+        logger.info(
+            "adapter.call.start adapter=AgyAdapter role=%s model=%r cwd=%s timeout=%s",
+            self.role,
+            self.model,
+            self.cwd,
+            self.timeout,
         )
+        # ÖNEMLİ: agy'yi asyncio.create_subprocess_exec ile DEĞİL, thread içinde senkron
+        # subprocess.run ile koştur. Windows ProactorEventLoop'un overlapped pipe'ları agy
+        # ile takılıyor: süreç bitse bile stdout EOF gelmiyor → "no-exit" gibi 300s asılma.
+        # Senkron subprocess.run aynı promptta ~8s'de temiz çıkıyor (kanıtlandı). Kilit
+        # zaten seri çalıştırdığı için thread güvenli.
         try:
-            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=self.timeout)
-        except asyncio.TimeoutError:
-            proc.kill()
-            await proc.wait()
+            result = await asyncio.to_thread(self._spawn_blocking, cmd)
+        except subprocess.TimeoutExpired:
+            logger.error(
+                "adapter.call.timeout adapter=AgyAdapter role=%s elapsed=%.1fs",
+                self.role,
+                time.perf_counter() - started_at,
+            )
             raise TimeoutError(f"AgyAdapter {self.timeout}s içinde cevap vermedi.")
 
-        self.last_stdout = stdout.decode("utf-8", errors="replace")
-        self.last_stderr = stderr.decode("utf-8", errors="replace")
+        self.last_stdout = (result.stdout or b"").decode("utf-8", errors="replace")
+        self.last_stderr = (result.stderr or b"").decode("utf-8", errors="replace")
+        returncode = result.returncode
+        logger.info(
+            "adapter.call.return adapter=AgyAdapter role=%s exit=%s elapsed=%.1fs stdout_chars=%s stderr_chars=%s",
+            self.role,
+            returncode,
+            time.perf_counter() - started_at,
+            len(self.last_stdout),
+            len(self.last_stderr),
+        )
+
+        # Öncelik: stdout/stderr'deki sentinel → transcript fallback (agy stdout bug'ı).
         combined = self.last_stdout + "\n" + self.last_stderr
+        if SENTINEL_START in combined:
+            return combined
         transcript_text = await asyncio.to_thread(self._read_transcript_response)
-        response_text = combined if SENTINEL_START in combined else transcript_text
-        if proc.returncode != 0:
-            if response_text and SENTINEL_START in response_text:
-                data = extract_json_between_sentinels(response_text)
-                return self._validate(data)
+        logger.info(
+            "adapter.transcript adapter=AgyAdapter role=%s found=%s",
+            self.role,
+            bool(transcript_text and SENTINEL_START in transcript_text),
+        )
+        if transcript_text and SENTINEL_START in transcript_text:
+            return transcript_text
+        if returncode not in (0, None):
             raise RuntimeError(
-                f"agy print başarısız oldu (exit={proc.returncode}). Çıktı:\n{combined[-2500:]}"
+                f"agy print başarısız oldu (exit={returncode}). Çıktı:\n{combined[-2500:]}"
             )
-        if not response_text:
-            raise RuntimeError(
-                "agy cevap metni bulunamadı: stdout boş/sentinel'siz ve transcript fallback "
-                f"sonuç vermedi. cwd={self.cwd} app_data_dir={self.app_data_dir}"
-            )
-        data = extract_json_between_sentinels(response_text)
-        return self._validate(data)
+        raise RuntimeError(
+            "agy cevap metni bulunamadı: stdout boş/sentinel'siz ve transcript fallback "
+            f"sonuç vermedi. cwd={self.cwd} app_data_dir={self.app_data_dir}"
+        )
+
+    def _spawn_blocking(self, cmd: list[str]) -> "subprocess.CompletedProcess[bytes]":
+        """Senkron Popen (thread içinde çağrılır). Timeout olursa TÜM süreç ağacını öldür:
+        agy node tabanlı, `proc.kill()` sadece parent'ı öldürür, node çocukları zombi kalıp
+        agy'nin global durumunu (`~/.gemini`) kilitler → sonraki agy'ler de takılır."""
+        creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+        # stdin=DEVNULL KRİTİK: agy interaktif bir CLI. stdin verilmezse parent'ın
+        # stdin'ini miras alır. Electron backend'i `shell: true` ile başlattığı için
+        # uvicorn'un stdin'i tuhaf/açık bir handle → agy onu okumaya çalışıp 300s asılır.
+        # (Aynı kod terminalden çalışırken stdin normal olduğu için sorunsuzdu.)
+        # DEVNULL → agy anında EOF görür, beklemez.
+        proc = subprocess.Popen(
+            cmd,
+            cwd=str(self.cwd),
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            creationflags=creationflags,
+        )
+        try:
+            stdout, stderr = proc.communicate(timeout=self.timeout)
+            return subprocess.CompletedProcess(cmd, proc.returncode, stdout, stderr)
+        except subprocess.TimeoutExpired:
+            self._kill_tree(proc.pid)
+            try:
+                proc.communicate(timeout=5)
+            except Exception:  # noqa: BLE001
+                pass
+            raise
+
+    @staticmethod
+    def _kill_tree(pid: int) -> None:
+        flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+        try:
+            if os.name == "nt":
+                subprocess.run(
+                    ["taskkill", "/F", "/T", "/PID", str(pid)],
+                    capture_output=True,
+                    creationflags=flags,
+                )
+            else:
+                os.killpg(os.getpgid(pid), 9)
+        except Exception:  # noqa: BLE001
+            pass
 
     def _read_transcript_response(self) -> str | None:
         deadline = time.time() + self.transcript_poll_seconds
